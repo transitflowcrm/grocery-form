@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Grocery Stock Update</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 12px; background:#f5f5f5; margin:0; }
+    .wrap { max-width: 640px; margin: 0 auto; padding: 12px; }
+    h2 { color:#075E54; }
+    .item { background:#fff; border-radius:8px; padding:10px 14px; margin-bottom:10px; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
+    .item-name { font-weight:bold; }
+    .item-meta { font-size:12px; color:#666; margin-bottom:6px; }
+    .input-row { display:flex; align-items:center; gap:10px; }
+    input[type=number] {
+      flex: 1; padding:8px; font-size:16px; box-sizing:border-box;
+      border:1px solid #ccc; border-radius:6px; transition: all 0.15s;
+    }
+    input[type=number].filled { border-color:#25D366; background:#eaffea; }
+    input[type=number]:disabled { background:#eee; color:#999; border-color:#ddd; }
+    .na-label { font-size:13px; white-space:nowrap; color:#555; display:flex; align-items:center; gap:4px; }
+    button { width:100%; padding:14px; font-size:16px; background:#25D366; color:#fff; border:none; border-radius:8px; margin-top:16px; }
+    button:disabled { background:#aaa; }
+    #status { text-align:center; margin-top:16px; font-weight:bold; }
+    .retry { background:#075E54; }
+
+    .summary-heading { color:#075E54; margin-bottom:10px; }
+    .summary-item { background:#fff; border-radius:8px; padding:10px 14px; margin-bottom:8px; box-shadow:0 1px 3px rgba(0,0,0,0.1); display:flex; justify-content:space-between; gap:10px; }
+    .summary-item .name { font-weight:bold; }
+    .summary-item .qty { color:#075E54; font-weight:bold; white-space:nowrap; }
+
+    .overlay {
+      position: fixed; top:0; left:0; right:0; bottom:0;
+      background: rgba(0,0,0,0.5);
+      display:flex; align-items:center; justify-content:center;
+      z-index: 999;
+    }
+    .cheer-box { background:#fff; border-radius:12px; padding:30px 40px; text-align:center; animation: popIn 0.25s ease; }
+    .cheer-box .emoji { font-size:44px; margin-bottom:6px; }
+    .cheer-box p { margin:0; color:#333; font-size:16px; font-weight:bold; }
+    @keyframes popIn { from { transform: scale(0.7); opacity:0; } to { transform: scale(1); opacity:1; } }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h2 id="title">Grocery Stock Update</h2>
+  <div id="list">Loading items...</div>
+  <button id="submitBtn" style="display:none;">Submit</button>
+  <div id="status"></div>
+</div>
+
+<script>
+  /************ EDIT THESE TWO LINES ************/
+  // 1) The /exec link of your Apps Script web app (Deploy > Manage deployments)
+  var API_URL = 'https://script.google.com/macros/s/AKfycbzMF4S0NOlbuxYq1hwTMpXCYXnuxw9FOMBumf4ZrBtasQjgCbSwyrVsFjuiPHevJQnT/exec';
+  // 2) Must be exactly the same text as API_KEY in the Apps Script code
+  var API_KEY = 'Gr0cery-Kitchen-4156';
+  /*********************************************/
+
+  var TYPE = (new URLSearchParams(window.location.search).get('type') === 'Weekly') ? 'Weekly' : 'Monthly';
+  var items = [];
+  var submitting = false;
+
+  document.getElementById('title').textContent = TYPE + ' Grocery Stock Update';
+  document.title = TYPE + ' Grocery Stock Update';
+  document.getElementById('submitBtn').addEventListener('click', submitForm);
+
+  function esc(v) {
+    return String(v === null || v === undefined ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function loadItems() {
+    var list = document.getElementById('list');
+    list.textContent = 'Loading items...';
+    document.getElementById('status').textContent = '';
+
+    fetch(API_URL + '?key=' + encodeURIComponent(API_KEY) + '&type=' + encodeURIComponent(TYPE))
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.error || 'Could not load items');
+        items = res.items || [];
+        renderItems();
+      })
+      .catch(function (err) {
+        list.innerHTML = '<p>❌ Could not load the list (' + esc(err.message) + ').</p>' +
+          '<button class="retry" id="retryBtn">Try again</button>';
+        document.getElementById('retryBtn').addEventListener('click', loadItems);
+      });
+  }
+
+  function renderItems() {
+    var html = '';
+    items.forEach(function (item, idx) {
+      var nameLine = item.name + (item.brand ? ' - ' + item.brand : '');
+      html += '<div class="item">' +
+        '<div class="item-name">' + esc(nameLine) + '</div>' +
+        '<div class="item-meta">Required: ' + esc(item.required) + ' ' + esc(item.unit) +
+        ' &nbsp;|&nbsp; Last order qty: ' + esc(item.lastOrder) + ' ' + esc(item.unit) + '</div>' +
+        '<div class="input-row">' +
+          '<input type="number" min="0" step="any" inputmode="decimal" placeholder="Enter available qty" id="qty_' + idx + '">' +
+          '<label class="na-label"><input type="checkbox" id="na_' + idx + '"> N/A</label>' +
+        '</div>' +
+        '</div>';
+    });
+    var list = document.getElementById('list');
+    list.innerHTML = html || '<p>No items configured for this cycle.</p>';
+    document.getElementById('submitBtn').style.display = items.length ? 'block' : 'none';
+
+    items.forEach(function (item, idx) {
+      document.getElementById('qty_' + idx).addEventListener('input', function () { markFilled(idx); });
+      document.getElementById('na_' + idx).addEventListener('change', function () { toggleNA(idx); });
+    });
+  }
+
+  function markFilled(idx) {
+    var input = document.getElementById('qty_' + idx);
+    if (input.value !== '') input.classList.add('filled');
+    else input.classList.remove('filled');
+  }
+
+  function toggleNA(idx) {
+    var input = document.getElementById('qty_' + idx);
+    var checkbox = document.getElementById('na_' + idx);
+    if (checkbox.checked) {
+      input.value = '';
+      input.classList.remove('filled');
+      input.disabled = true;
+    } else {
+      input.disabled = false;
+    }
+  }
+
+  function submitForm() {
+    if (submitting) return;
+
+    var entries = [];
+    var recap = [];
+    for (var idx = 0; idx < items.length; idx++) {
+      if (document.getElementById('na_' + idx).checked) continue; // N/A = skipped entirely
+
+      var val = document.getElementById('qty_' + idx).value;
+      if (val === '' || isNaN(Number(val)) || Number(val) < 0) {
+        alert('Please enter a valid available qty for: ' + items[idx].name + ' (or mark it N/A)');
+        return;
+      }
+      entries.push({ row: items[idx].row, available: Number(val) });
+      recap.push({ name: items[idx].name, unit: items[idx].unit, value: val });
+    }
+
+    if (entries.length === 0) {
+      alert('Nothing to submit — every item is marked N/A.');
+      return;
+    }
+
+    submitting = true;
+    var btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.textContent = 'Submitting...';
+    document.getElementById('status').textContent = '';
+
+    // No custom headers on purpose: this keeps it a "simple" request so the
+    // browser does not need a pre-flight check, which Apps Script cannot answer.
+    fetch(API_URL, {
+      method: 'POST',
+      body: JSON.stringify({ key: API_KEY, type: TYPE, entries: entries })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.error || 'Submit failed');
+        showCheers();
+        renderSummary(recap, res.count);
+      })
+      .catch(function (err) {
+        submitting = false;
+        document.getElementById('status').textContent = '❌ Error: ' + err.message + ' — please try again.';
+        btn.disabled = false;
+        btn.textContent = 'Submit';
+      });
+  }
+
+  function showCheers() {
+    var overlay = document.createElement('div');
+    overlay.className = 'overlay';
+    overlay.innerHTML = '<div class="cheer-box"><div class="emoji">🎉</div><p>Cheers! Stock submitted successfully.</p></div>';
+    document.body.appendChild(overlay);
+    setTimeout(function () { overlay.remove(); }, 2000);
+  }
+
+  function renderSummary(recap, orderCount) {
+    var html = '<h3 class="summary-heading">✅ Submitted — ' + esc(orderCount) + ' item(s) need ordering</h3>';
+    recap.forEach(function (entry) {
+      html += '<div class="summary-item"><span class="name">' + esc(entry.name) + '</span>' +
+        '<span class="qty">' + esc(entry.value) + ' ' + esc(entry.unit) + '</span></div>';
+    });
+    document.getElementById('list').innerHTML = html;
+    document.getElementById('submitBtn').style.display = 'none';
+  }
+
+  loadItems();
+</script>
+</body>
+</html>
